@@ -1,0 +1,1436 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DALScooter Authentication System - Complete and Fully Functional'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: DALScooter
+    Description: Name of the project
+  
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  NotificationEmail:
+    Type: String
+    Description: Email address for notifications (required)
+    AllowedPattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
+    ConstraintDescription: Must be a valid email address
+
+Resources:
+  # DynamoDB Tables
+  UserDetailsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-UserDetails-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: email-index
+          KeySchema:
+            - AttributeName: email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  SecurityQuestionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-SecurityQuestions-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  CaesarChallengesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-CaesarChallenges-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  AuthSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-AuthSessions-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Cognito User Pool
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${ProjectName}-UserPool-${Environment}'
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      AutoVerifiedAttributes:
+        - email
+      MfaConfiguration: 'OFF'
+      UsernameAttributes:
+        - email
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: name
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: user_id
+          AttributeDataType: String
+          Mutable: true
+        - Name: user_type
+          AttributeDataType: String
+          Mutable: true
+      UserPoolTags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${ProjectName}-UserPoolClient-${Environment}'
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+
+  # SNS Topic for Notifications
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-Notifications-${Environment}'
+      DisplayName: DALScooter Authentication Notifications
+
+  NotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref NotificationTopic
+      Endpoint: !Ref NotificationEmail
+
+  # IAM Role for Lambda Functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DALScooterLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt UserDetailsTable.Arn
+                  - !GetAtt SecurityQuestionsTable.Arn
+                  - !GetAtt CaesarChallengesTable.Arn
+                  - !GetAtt AuthSessionsTable.Arn
+                  - !Sub '${UserDetailsTable.Arn}/index/*'
+              - Effect: Allow
+                Action:
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminSetUserPassword
+                  - cognito-idp:AdminInitiateAuth
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:ListUsers
+                Resource: !GetAtt UserPool.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref NotificationTopic
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+  # Lambda Function for User Registration
+  UserRegistrationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-UserRegistration-${Environment}'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref UserPool
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+          USER_DETAILS_TABLE: !Ref UserDetailsTable
+          SECURITY_QUESTIONS_TABLE: !Ref SecurityQuestionsTable
+          CAESAR_CHALLENGES_TABLE: !Ref CaesarChallengesTable
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import uuid
+          import hashlib
+          import random
+          import string
+          import os
+          from datetime import datetime
+          from botocore.exceptions import ClientError
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          # Initialize AWS clients
+          dynamodb = boto3.resource('dynamodb')
+          cognito = boto3.client('cognito-idp')
+          sns = boto3.client('sns')
+
+          # Environment variables
+          USER_POOL_ID = os.environ['USER_POOL_ID']
+          SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
+          USER_DETAILS_TABLE = os.environ['USER_DETAILS_TABLE']
+          SECURITY_QUESTIONS_TABLE = os.environ['SECURITY_QUESTIONS_TABLE']
+          CAESAR_CHALLENGES_TABLE = os.environ['CAESAR_CHALLENGES_TABLE']
+
+          def lambda_handler(event, context):
+              """Handle user registration with validation and multi-factor authentication setup"""
+              
+              # Add CORS headers for all responses
+              headers = {
+                  'Content-Type': 'application/json',
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+              }
+              
+              try:
+                  # Handle preflight OPTIONS request
+                  if event.get('httpMethod') == 'OPTIONS':
+                      return {
+                          'statusCode': 200,
+                          'headers': headers,
+                          'body': json.dumps({'message': 'CORS preflight'})
+                      }
+                  
+                  # Parse request body
+                  if isinstance(event.get('body'), str):
+                      body = json.loads(event['body'])
+                  else:
+                      body = event.get('body', {})
+                  
+                  logger.info(f"Registration request received: {json.dumps(body, default=str)}")
+                  
+                  # Extract and validate user details
+                  email = body.get('email', '').strip().lower()
+                  password = body.get('password', '')
+                  full_name = body.get('fullName', '').strip()
+                  user_type = body.get('userType', 'customer')
+                  security_question = body.get('securityQuestion', '')
+                  security_answer = body.get('securityAnswer', '').strip()
+                  
+                  # Validation
+                  if not all([email, password, full_name, security_question, security_answer]):
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'All fields are required',
+                              'missing_fields': [
+                                  field for field in ['email', 'password', 'fullName', 'securityQuestion', 'securityAnswer']
+                                  if not body.get(field)
+                              ]
+                          })
+                      }
+                  
+                  # Email validation
+                  if '@' not in email or '.' not in email:
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Invalid email format'
+                          })
+                      }
+                  
+                  # Password validation
+                  if len(password) < 8:
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Password must be at least 8 characters long'
+                          })
+                      }
+                  
+                  # Generate unique user ID
+                  user_id = str(uuid.uuid4())
+                  
+                  logger.info(f"Creating user with ID: {user_id}")
+                  
+                  # Create user in Cognito
+                  try:
+                      cognito_response = cognito.admin_create_user(
+                          UserPoolId=USER_POOL_ID,
+                          Username=email,
+                          TemporaryPassword=password,
+                          MessageAction='SUPPRESS',
+                          UserAttributes=[
+                              {'Name': 'email', 'Value': email},
+                              {'Name': 'name', 'Value': full_name},
+                              {'Name': 'custom:user_id', 'Value': user_id},
+                              {'Name': 'custom:user_type', 'Value': user_type},
+                              {'Name': 'email_verified', 'Value': 'true'}
+                          ]
+                      )
+                      
+                      logger.info(f"Created Cognito user: {cognito_response['User']['Username']}")
+                      
+                      # Set permanent password
+                      cognito.admin_set_user_password(
+                          UserPoolId=USER_POOL_ID,
+                          Username=email,
+                          Password=password,
+                          Permanent=True
+                      )
+                      
+                      logger.info("Set permanent password for user")
+                      
+                  except ClientError as e:
+                      error_code = e.response['Error']['Code']
+                      logger.error(f"Cognito error: {error_code}")
+                      
+                      if error_code == 'UsernameExistsException':
+                          return {
+                              'statusCode': 409,
+                              'headers': headers,
+                              'body': json.dumps({
+                                  'error': 'User with this email already exists'
+                              })
+                          }
+                      elif error_code == 'InvalidPasswordException':
+                          return {
+                              'statusCode': 400,
+                              'headers': headers,
+                              'body': json.dumps({
+                                  'error': 'Password does not meet requirements'
+                              })
+                          }
+                      else:
+                          logger.error(f"Unexpected Cognito error: {e}")
+                          return {
+                              'statusCode': 500,
+                              'headers': headers,
+                              'body': json.dumps({
+                                  'error': 'Failed to create user account'
+                              })
+                          }
+                  
+                  # Store user details in DynamoDB
+                  user_details_table = dynamodb.Table(USER_DETAILS_TABLE)
+                  user_details_table.put_item(
+                      Item={
+                          'userId': user_id,
+                          'email': email,
+                          'fullName': full_name,
+                          'userType': user_type,
+                          'registrationDate': datetime.utcnow().isoformat(),
+                          'isActive': True,
+                          'createdAt': datetime.utcnow().isoformat(),
+                          'updatedAt': datetime.utcnow().isoformat()
+                      }
+                  )
+                  
+                  logger.info("Stored user details in DynamoDB")
+                  
+                  # Store security question and hashed answer
+                  hashed_answer = hashlib.sha256(security_answer.lower().strip().encode()).hexdigest()
+                  security_questions_table = dynamodb.Table(SECURITY_QUESTIONS_TABLE)
+                  security_questions_table.put_item(
+                      Item={
+                          'userId': user_id,
+                          'question': security_question,
+                          'hashedAnswer': hashed_answer,
+                          'createdDate': datetime.utcnow().isoformat()
+                      }
+                  )
+                  
+                  logger.info("Stored security question in DynamoDB")
+                  
+                  # Generate Caesar cipher challenge
+                  caesar_challenge = generate_caesar_challenge()
+                  caesar_challenges_table = dynamodb.Table(CAESAR_CHALLENGES_TABLE)
+                  caesar_challenges_table.put_item(
+                      Item={
+                          'userId': user_id,
+                          'challenge': caesar_challenge['challenge'],
+                          'solution': caesar_challenge['solution'],
+                          'shift': caesar_challenge['shift'],
+                          'createdDate': datetime.utcnow().isoformat()
+                      }
+                  )
+                  
+                  logger.info("Generated and stored Caesar cipher challenge")
+                  
+                  # Send registration notification
+                  try:
+                      send_registration_notification(email, full_name)
+                      logger.info("Sent registration notification")
+                  except Exception as e:
+                      logger.error(f"Failed to send notification: {e}")
+                      # Don't fail registration if notification fails
+                  
+                  return {
+                      'statusCode': 200,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'message': 'User registered successfully',
+                          'userId': user_id,
+                          'email': email,
+                          'fullName': full_name,
+                          'userType': user_type,
+                          'registrationComplete': True,
+                          'timestamp': datetime.utcnow().isoformat()
+                      })
+                  }
+                  
+              except Exception as e:
+                  logger.error(f"Unexpected error in registration: {e}")
+                  return {
+                      'statusCode': 500,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'error': 'Internal server error during registration',
+                          'timestamp': datetime.utcnow().isoformat()
+                      })
+                  }
+
+          def generate_caesar_challenge():
+              """Generate a Caesar cipher challenge"""
+              phrases = [
+                  "HELLO WORLD",
+                  "SECURE LOGIN",
+                  "BIKE RENTAL",
+                  "DALSCOOTER APP",
+                  "CLOUD COMPUTING",
+                  "SERVERLESS TECH",
+                  "AUTHENTICATION",
+                  "MULTI FACTOR",
+                  "CYBER SECURITY",
+                  "DATA PROTECTION"
+              ]
+              
+              # Select random phrase and shift
+              phrase = random.choice(phrases)
+              shift = random.randint(1, 25)
+              
+              # Apply Caesar cipher
+              encrypted = ""
+              for char in phrase:
+                  if char.isalpha():
+                      ascii_offset = ord('A')
+                      encrypted += chr((ord(char) - ascii_offset + shift) % 26 + ascii_offset)
+                  else:
+                      encrypted += char
+              
+              return {
+                  'challenge': encrypted,
+                  'solution': phrase,
+                  'shift': shift
+              }
+
+          def send_registration_notification(email, full_name):
+              """Send registration notification via SNS"""
+              try:
+                  message = f"""
+          Welcome to DALScooter!
+
+          Dear {full_name},
+
+          Your registration has been completed successfully.
+
+          Account Details:
+          - Email: {email}
+          - Registration Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+
+          Your account is now active and you can start using our services.
+
+          To log in, you'll need to complete our secure 3-step authentication process:
+          1. Email and Password
+          2. Security Question
+          3. Caesar Cipher Challenge
+
+          Thank you for choosing DALScooter!
+
+          Best regards,
+          The DALScooter Team
+                  """
+                  
+                  sns.publish(
+                      TopicArn=SNS_TOPIC_ARN,
+                      Message=message,
+                      Subject=f'Welcome to DALScooter - Registration Confirmed'
+                  )
+                  
+              except Exception as e:
+                  logger.error(f"Failed to send notification: {e}")
+                  pass
+
+  # Lambda Function for Multi-Factor Authentication
+  MultiFactorAuthFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-MultiFactorAuth-${Environment}'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref UserPool
+          USER_POOL_CLIENT_ID: !Ref UserPoolClient
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+          USER_DETAILS_TABLE: !Ref UserDetailsTable
+          SECURITY_QUESTIONS_TABLE: !Ref SecurityQuestionsTable
+          CAESAR_CHALLENGES_TABLE: !Ref CaesarChallengesTable
+          AUTH_SESSIONS_TABLE: !Ref AuthSessionsTable
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import hashlib
+          import uuid
+          import os
+          from datetime import datetime, timedelta
+          from botocore.exceptions import ClientError
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          # Initialize AWS clients
+          dynamodb = boto3.resource('dynamodb')
+          cognito = boto3.client('cognito-idp')
+          sns = boto3.client('sns')
+
+          # Environment variables
+          USER_POOL_ID = os.environ['USER_POOL_ID']
+          USER_POOL_CLIENT_ID = os.environ['USER_POOL_CLIENT_ID']
+          SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
+          USER_DETAILS_TABLE = os.environ['USER_DETAILS_TABLE']
+          SECURITY_QUESTIONS_TABLE = os.environ['SECURITY_QUESTIONS_TABLE']
+          CAESAR_CHALLENGES_TABLE = os.environ['CAESAR_CHALLENGES_TABLE']
+          AUTH_SESSIONS_TABLE = os.environ['AUTH_SESSIONS_TABLE']
+
+          def lambda_handler(event, context):
+              """Handle multi-factor authentication process"""
+              
+              # Add CORS headers for all responses
+              headers = {
+                  'Content-Type': 'application/json',
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+              }
+              
+              try:
+                  # Handle preflight OPTIONS request
+                  if event.get('httpMethod') == 'OPTIONS':
+                      return {
+                          'statusCode': 200,
+                          'headers': headers,
+                          'body': json.dumps({'message': 'CORS preflight'})
+                      }
+                  
+                  # Parse request body
+                  if isinstance(event.get('body'), str):
+                      body = json.loads(event['body'])
+                  else:
+                      body = event.get('body', {})
+                  
+                  action = body.get('action')
+                  logger.info(f"MFA request received: {action}")
+                  
+                  if action == 'login_step1':
+                      return handle_login_step1(body, headers)
+                  elif action == 'login_step2':
+                      return handle_login_step2(body, headers)
+                  elif action == 'login_step3':
+                      return handle_login_step3(body, headers)
+                  elif action == 'get_security_question':
+                      return get_security_question(body, headers)
+                  elif action == 'get_caesar_challenge':
+                      return get_caesar_challenge(body, headers)
+                  else:
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Invalid action specified',
+                              'valid_actions': ['login_step1', 'login_step2', 'login_step3', 'get_security_question', 'get_caesar_challenge']
+                          })
+                      }
+                      
+              except Exception as e:
+                  logger.error(f"Unexpected error in MFA: {e}")
+                  return {
+                      'statusCode': 500,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'error': 'Internal server error',
+                          'timestamp': datetime.utcnow().isoformat()
+                      })
+                  }
+
+          def handle_login_step1(body, headers):
+              """Handle first factor authentication - Cognito username/password"""
+              try:
+                  email = body.get('email', '').strip().lower()
+                  password = body.get('password', '')
+                  
+                  if not email or not password:
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Email and password are required'
+                          })
+                      }
+                  
+                  logger.info(f"Attempting Step 1 authentication for: {email}")
+                  
+                  # Authenticate with Cognito
+                  try:
+                      response = cognito.admin_initiate_auth(
+                          UserPoolId=USER_POOL_ID,
+                          ClientId=USER_POOL_CLIENT_ID,
+                          AuthFlow='ADMIN_USER_PASSWORD_AUTH',
+                          AuthParameters={
+                              'USERNAME': email,
+                              'PASSWORD': password
+                          }
+                      )
+                      
+                      logger.info("Cognito authentication successful")
+                      
+                  except ClientError as e:
+                      error_code = e.response['Error']['Code']
+                      logger.error(f"Cognito authentication failed: {error_code}")
+                      
+                      if error_code in ['NotAuthorizedException', 'UserNotFoundException']:
+                          return {
+                              'statusCode': 401,
+                              'headers': headers,
+                              'body': json.dumps({
+                                  'error': 'Invalid email or password'
+                              })
+                          }
+                      else:
+                          return {
+                              'statusCode': 500,
+                              'headers': headers,
+                              'body': json.dumps({
+                                  'error': 'Authentication service error'
+                              })
+                          }
+                  
+                  # Get user details from Cognito
+                  try:
+                      user_response = cognito.admin_get_user(
+                          UserPoolId=USER_POOL_ID,
+                          Username=email
+                      )
+                      
+                      # Extract user ID from custom attributes
+                      user_id = None
+                      for attr in user_response['UserAttributes']:
+                          if attr['Name'] == 'custom:user_id':
+                              user_id = attr['Value']
+                              break
+                      
+                      if not user_id:
+                          logger.error("User ID not found in Cognito attributes")
+                          return {
+                              'statusCode': 500,
+                              'headers': headers,
+                              'body': json.dumps({
+                                  'error': 'User account configuration error'
+                              })
+                          }
+                      
+                      logger.info(f"Retrieved user ID: {user_id}")
+                      
+                  except ClientError as e:
+                      logger.error(f"Failed to get user details: {e}")
+                      return {
+                          'statusCode': 500,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Failed to retrieve user information'
+                          })
+                      }
+                  
+                  # Create authentication session
+                  session_id = str(uuid.uuid4())
+                  ttl = int((datetime.utcnow() + timedelta(minutes=30)).timestamp())
+                  
+                  auth_sessions_table = dynamodb.Table(AUTH_SESSIONS_TABLE)
+                  auth_sessions_table.put_item(
+                      Item={
+                          'sessionId': session_id,
+                          'userId': user_id,
+                          'email': email,
+                          'step1Complete': True,
+                          'step2Complete': False,
+                          'step3Complete': False,
+                          'fullyAuthenticated': False,
+                          'createdDate': datetime.utcnow().isoformat(),
+                          'ttl': ttl
+                      }
+                  )
+                  
+                  logger.info(f"Created authentication session: {session_id}")
+                  
+                  return {
+                      'statusCode': 200,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'message': 'Step 1 authentication successful',
+                          'sessionId': session_id,
+                          'nextStep': 'security_question',
+                          'userId': user_id,
+                          'timestamp': datetime.utcnow().isoformat()
+                      })
+                  }
+                  
+              except Exception as e:
+                  logger.error(f"Error in Step 1 authentication: {e}")
+                  return {
+                      'statusCode': 500,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'error': 'Step 1 authentication failed'
+                      })
+                  }
+
+          def handle_login_step2(body, headers):
+              """Handle second factor authentication - Security question"""
+              try:
+                  session_id = body.get('sessionId', '')
+                  security_answer = body.get('securityAnswer', '').strip()
+                  
+                  if not session_id or not security_answer:
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Session ID and security answer are required'
+                          })
+                      }
+                  
+                  logger.info(f"Attempting Step 2 authentication for session: {session_id}")
+                  
+                  # Get session details
+                  auth_sessions_table = dynamodb.Table(AUTH_SESSIONS_TABLE)
+                  session_response = auth_sessions_table.get_item(
+                      Key={'sessionId': session_id}
+                  )
+                  
+                  if 'Item' not in session_response:
+                      return {
+                          'statusCode': 404,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Invalid or expired session'
+                          })
+                      }
+                  
+                  session = session_response['Item']
+                  user_id = session['userId']
+                  
+                  # Check if step 1 is complete
+                  if not session.get('step1Complete', False):
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Step 1 authentication not completed'
+                          })
+                      }
+                  
+                  # Check session expiration
+                  if session.get('ttl', 0) < int(datetime.utcnow().timestamp()):
+                      return {
+                          'statusCode': 401,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Session expired'
+                          })
+                      }
+                  
+                  # Get security question details
+                  security_questions_table = dynamodb.Table(SECURITY_QUESTIONS_TABLE)
+                  security_response = security_questions_table.get_item(
+                      Key={'userId': user_id}
+                  )
+                  
+                  if 'Item' not in security_response:
+                      return {
+                          'statusCode': 404,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Security question not found'
+                          })
+                      }
+                  
+                  security_data = security_response['Item']
+                  
+                  # Verify answer
+                  hashed_answer = hashlib.sha256(security_answer.lower().strip().encode()).hexdigest()
+                  if hashed_answer != security_data['hashedAnswer']:
+                      logger.warning(f"Incorrect security answer for user: {user_id}")
+                      return {
+                          'statusCode': 401,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Incorrect security answer'
+                          })
+                      }
+                  
+                  # Update session
+                  auth_sessions_table.update_item(
+                      Key={'sessionId': session_id},
+                      UpdateExpression='SET step2Complete = :val, updatedAt = :updated',
+                      ExpressionAttributeValues={
+                          ':val': True,
+                          ':updated': datetime.utcnow().isoformat()
+                      }
+                  )
+                  
+                  logger.info(f"Step 2 authentication successful for session: {session_id}")
+                  
+                  return {
+                      'statusCode': 200,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'message': 'Step 2 authentication successful',
+                          'sessionId': session_id,
+                          'nextStep': 'caesar_cipher',
+                          'timestamp': datetime.utcnow().isoformat()
+                      })
+                  }
+                  
+              except Exception as e:
+                  logger.error(f"Error in Step 2 authentication: {e}")
+                  return {
+                      'statusCode': 500,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'error': 'Step 2 authentication failed'
+                      })
+                  }
+
+          def handle_login_step3(body, headers):
+              """Handle third factor authentication - Caesar cipher"""
+              try:
+                  session_id = body.get('sessionId', '')
+                  caesar_answer = body.get('caesarAnswer', '').upper().strip()
+                  
+                  if not session_id or not caesar_answer:
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Session ID and Caesar cipher answer are required'
+                          })
+                      }
+                  
+                  logger.info(f"Attempting Step 3 authentication for session: {session_id}")
+                  
+                  # Get session details
+                  auth_sessions_table = dynamodb.Table(AUTH_SESSIONS_TABLE)
+                  session_response = auth_sessions_table.get_item(
+                      Key={'sessionId': session_id}
+                  )
+                  
+                  if 'Item' not in session_response:
+                      return {
+                          'statusCode': 404,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Invalid or expired session'
+                          })
+                      }
+                  
+                  session = session_response['Item']
+                  user_id = session['userId']
+                  
+                  # Verify previous steps are complete
+                  if not session.get('step1Complete', False) or not session.get('step2Complete', False):
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Previous authentication steps not completed'
+                          })
+                      }
+                  
+                  # Check session expiration
+                  if session.get('ttl', 0) < int(datetime.utcnow().timestamp()):
+                      return {
+                          'statusCode': 401,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Session expired'
+                          })
+                      }
+                  
+                  # Get Caesar cipher challenge
+                  caesar_challenges_table = dynamodb.Table(CAESAR_CHALLENGES_TABLE)
+                  caesar_response = caesar_challenges_table.get_item(
+                      Key={'userId': user_id}
+                  )
+                  
+                  if 'Item' not in caesar_response:
+                      return {
+                          'statusCode': 404,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Caesar cipher challenge not found'
+                          })
+                      }
+                  
+                  caesar_data = caesar_response['Item']
+                  
+                  # Verify answer
+                  if caesar_answer != caesar_data['solution']:
+                      logger.warning(f"Incorrect Caesar cipher solution for user: {user_id}")
+                      return {
+                          'statusCode': 401,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Incorrect Caesar cipher solution'
+                          })
+                      }
+                  
+                  # Update session as fully authenticated
+                  auth_sessions_table.update_item(
+                      Key={'sessionId': session_id},
+                      UpdateExpression='SET step3Complete = :val, fullyAuthenticated = :auth, completedAt = :completed',
+                      ExpressionAttributeValues={
+                          ':val': True,
+                          ':auth': True,
+                          ':completed': datetime.utcnow().isoformat()
+                      }
+                  )
+                  
+                  # Get user details
+                  user_details_table = dynamodb.Table(USER_DETAILS_TABLE)
+                  user_response = user_details_table.get_item(
+                      Key={'userId': user_id}
+                  )
+                  
+                  if 'Item' not in user_response:
+                      return {
+                          'statusCode': 404,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'User details not found'
+                          })
+                      }
+                  
+                  user_data = user_response['Item']
+                  
+                  # Send login notification
+                  try:
+                      send_login_notification(user_data['email'], user_data['fullName'])
+                      logger.info("Sent login notification")
+                  except Exception as e:
+                      logger.error(f"Failed to send login notification: {e}")
+                  
+                  logger.info(f"Full authentication successful for user: {user_id}")
+                  
+                  return {
+                      'statusCode': 200,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'message': 'Authentication successful',
+                          'sessionId': session_id,
+                          'userId': user_id,
+                          'userType': user_data['userType'],
+                          'fullName': user_data['fullName'],
+                          'email': user_data['email'],
+                          'fullyAuthenticated': True,
+                          'timestamp': datetime.utcnow().isoformat()
+                      })
+                  }
+                  
+              except Exception as e:
+                  logger.error(f"Error in Step 3 authentication: {e}")
+                  return {
+                      'statusCode': 500,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'error': 'Step 3 authentication failed'
+                      })
+                  }
+
+          def get_security_question(body, headers):
+              """Get security question for user"""
+              try:
+                  session_id = body.get('sessionId', '')
+                  
+                  if not session_id:
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Session ID is required'
+                          })
+                      }
+                  
+                  # Get session details
+                  auth_sessions_table = dynamodb.Table(AUTH_SESSIONS_TABLE)
+                  session_response = auth_sessions_table.get_item(
+                      Key={'sessionId': session_id}
+                  )
+                  
+                  if 'Item' not in session_response:
+                      return {
+                          'statusCode': 404,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Invalid or expired session'
+                          })
+                      }
+                  
+                  session = session_response['Item']
+                  user_id = session['userId']
+                  
+                  # Get security question
+                  security_questions_table = dynamodb.Table(SECURITY_QUESTIONS_TABLE)
+                  security_response = security_questions_table.get_item(
+                      Key={'userId': user_id}
+                  )
+                  
+                  if 'Item' not in security_response:
+                      return {
+                          'statusCode': 404,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Security question not found'
+                          })
+                      }
+                  
+                  security_data = security_response['Item']
+                  
+                  return {
+                      'statusCode': 200,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'securityQuestion': security_data['question'],
+                          'sessionId': session_id
+                      })
+                  }
+                  
+              except Exception as e:
+                  logger.error(f"Error getting security question: {e}")
+                  return {
+                      'statusCode': 500,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'error': 'Failed to retrieve security question'
+                      })
+                  }
+
+          def get_caesar_challenge(body, headers):
+              """Get Caesar cipher challenge for user"""
+              try:
+                  session_id = body.get('sessionId', '')
+                  
+                  if not session_id:
+                      return {
+                          'statusCode': 400,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Session ID is required'
+                          })
+                      }
+                  
+                  # Get session details
+                  auth_sessions_table = dynamodb.Table(AUTH_SESSIONS_TABLE)
+                  session_response = auth_sessions_table.get_item(
+                      Key={'sessionId': session_id}
+                  )
+                  
+                  if 'Item' not in session_response:
+                      return {
+                          'statusCode': 404,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Invalid or expired session'
+                          })
+                      }
+                  
+                  session = session_response['Item']
+                  user_id = session['userId']
+                  
+                  # Get Caesar cipher challenge
+                  caesar_challenges_table = dynamodb.Table(CAESAR_CHALLENGES_TABLE)
+                  caesar_response = caesar_challenges_table.get_item(
+                      Key={'userId': user_id}
+                  )
+                  
+                  if 'Item' not in caesar_response:
+                      return {
+                          'statusCode': 404,
+                          'headers': headers,
+                          'body': json.dumps({
+                              'error': 'Caesar cipher challenge not found'
+                          })
+                      }
+                  
+                  caesar_data = caesar_response['Item']
+                  
+                  return {
+                      'statusCode': 200,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'caesarChallenge': caesar_data['challenge'],
+                          'hint': f"Decrypt this message (Caesar cipher with shift {caesar_data['shift']})",
+                          'sessionId': session_id
+                      })
+                  }
+                  
+              except Exception as e:
+                  logger.error(f"Error getting Caesar challenge: {e}")
+                  return {
+                      'statusCode': 500,
+                      'headers': headers,
+                      'body': json.dumps({
+                          'error': 'Failed to retrieve Caesar cipher challenge'
+                      })
+                  }
+
+          def send_login_notification(email, full_name):
+              """Send login notification via SNS"""
+              try:
+                  message = f"""
+          Login Notification - DALScooter
+
+          Dear {full_name},
+
+          You have successfully logged into your DALScooter account.
+
+          Login Details:
+          - Email: {email}
+          - Login Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+          - Authentication: Multi-factor authentication completed
+
+          If this login wasn't initiated by you, please contact our support team immediately.
+
+          Thank you for using DALScooter!
+
+          Best regards,
+          The DALScooter Security Team
+                  """
+                  
+                  sns.publish(
+                      TopicArn=SNS_TOPIC_ARN,
+                      Message=message,
+                      Subject=f'DALScooter Login Notification - {email}'
+                  )
+                  
+              except Exception as e:
+                  logger.error(f"Failed to send login notification: {e}")
+                  pass
+
+  # API Gateway
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${ProjectName}-API-${Environment}'
+      Description: DALScooter Authentication API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # API Gateway Resources
+  RegisterResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: register
+
+  AuthResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: auth
+
+  # API Gateway Methods
+  RegisterMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref RegisterResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UserRegistrationFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  RegisterOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref RegisterResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  AuthMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref AuthResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MultiFactorAuthFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  AuthOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref AuthResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # API Gateway Deployment
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - RegisterMethod
+      - RegisterOptionsMethod
+      - AuthMethod
+      - AuthOptionsMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref Environment
+
+  # Lambda Permissions
+  RegisterLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UserRegistrationFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*'
+
+  AuthLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MultiFactorAuthFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*'
+
+  # CloudWatch Log Groups
+  UserRegistrationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${UserRegistrationFunction}'
+      RetentionInDays: 14
+
+  MultiFactorAuthLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${MultiFactorAuthFunction}'
+      RetentionInDays: 14
+
+Outputs:
+  ApiGatewayUrl:
+    Description: API Gateway URL for the authentication system
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-ApiUrl'
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-UserPoolId'
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref UserPoolClient
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-UserPoolClientId'
+
+  NotificationTopicArn:
+    Description: SNS Topic ARN for notifications
+    Value: !Ref NotificationTopic
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-NotificationTopic'
+
+  ReactEnvConfig:
+    Description: Environment configuration for React app (.env file content)
+    Value: !Sub |
+      REACT_APP_API_URL=https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+      REACT_APP_COGNITO_USER_POOL_ID=${UserPool}
+      REACT_APP_COGNITO_CLIENT_ID=${UserPoolClient}
+      REACT_APP_ENVIRONMENT=${Environment}
+
+  TestInstructions:
+    Description: Test your authentication system with these steps
+    Value: !Sub |
+      1. REGISTER A USER:
+         - Go to your React app registration page
+         - Email: test@example.com
+         - Password: TestPassword123!
+         - Full Name: Test User
+         - Security Question: What was your first pet's name?
+         - Security Answer: Fluffy
+         - Click Register
+      
+      2. LOGIN WITH 3-FACTOR AUTHENTICATION:
+         - Step 1: Use email and password above
+         - Step 2: Answer security question with "Fluffy"
+         - Step 3: Solve the Caesar cipher challenge
+         - Access dashboard upon successful authentication
+      
+      3. VERIFY SYSTEM:
+         - Check email for registration/login notifications
+         - Verify DynamoDB tables have data
+         - Test session management (30-minute timeout)
+         - Test all three authentication factors work perfectly
+
+  DeploymentStatus:
+    Description: Deployment status
+    Value: !Sub |
+      DEPLOYMENT SUCCESSFUL
