@@ -7,6 +7,9 @@ import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import ProtectedRoute from './components/ProtectedRoute';
 import './styles/App.css';
+import ManageScooters from './components/ManageScooters';
+import ViewBookings from './components/ViewBookings';
+import SupportCenter from './components/SupportCenter';
 
 function App() {
   return (
@@ -27,6 +30,9 @@ function App() {
                 }
               />
               <Route path="/" element={<Login />} />
+              <Route path="/manage-scooters" element={<ManageScooters />} />
+              <Route path="/view-bookings" element={<ViewBookings />} />
+              <Route path="/support-center" element={<SupportCenter />} />
             </Routes>
           </div>
         </div>

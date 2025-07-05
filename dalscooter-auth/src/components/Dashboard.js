@@ -1,6 +1,7 @@
 import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { USER_TYPES } from '../utils/constants';
+ import { Link } from 'react-router-dom';
 
 const Dashboard = () => {
   const { user } = useAuth();
@@ -42,39 +43,57 @@ const Dashboard = () => {
   );
 
   const renderFranchiseDashboard = () => (
-    <div className="space-y-6">
-      <h3 className="text-xl font-semibold">Franchise Operator Dashboard</h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h4 className="font-medium mb-2">Manage Scooters</h4>
-          <p className="text-gray-600">Add, update, or remove scooters from your inventory.</p>
-          <button className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            Scooter Management
-          </button>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h4 className="font-medium mb-2">View Bookings</h4>
-          <p className="text-gray-600">See all current and upcoming bookings for your scooters.</p>
-          <button className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            View All Bookings
-          </button>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h4 className="font-medium mb-2">Customer Support</h4>
-          <p className="text-gray-600">Respond to customer inquiries and support tickets.</p>
-          <button className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            Support Center
-          </button>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h4 className="font-medium mb-2">Reports & Analytics</h4>
-          <p className="text-gray-600">View performance metrics and customer feedback.</p>
-          <button className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            View Reports
-          </button>
-        </div>
-      </div>
+   
+
+<div className="space-y-6">
+  <h3 className="text-xl font-semibold">Franchise Operator Dashboard</h3>
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+  
+   
+    <div className="bg-white p-6 rounded-lg shadow">
+      <h4 className="font-medium mb-2">Manage Scooters</h4>
+      <p className="text-gray-600">Add, update, or remove scooters from your inventory.</p>
+      <Link to="/manage-scooters">
+        <button className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+          Scooter Management
+        </button>
+      </Link>
     </div>
+
+   
+    <div className="bg-white p-6 rounded-lg shadow">
+      <h4 className="font-medium mb-2">View Bookings</h4>
+      <p className="text-gray-600">See all current and upcoming bookings for your scooters.</p>
+      <Link to="/view-bookings">
+        <button className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+          View All Bookings
+        </button>
+      </Link>
+    </div>
+
+    
+    <div className="bg-white p-6 rounded-lg shadow">
+      <h4 className="font-medium mb-2">Customer Support</h4>
+      <p className="text-gray-600">Respond to customer inquiries and support tickets.</p>
+       <Link to="/support-center">
+      <button className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+        Support Center
+      </button>
+      </Link>
+    </div>
+
+   
+    <div className="bg-white p-6 rounded-lg shadow">
+      <h4 className="font-medium mb-2">Reports & Analytics</h4>
+      <p className="text-gray-600">View performance metrics and customer feedback.</p>
+      <button className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+        View Reports
+      </button>
+    </div>
+    
+  </div>
+</div>
+
   );
 
   return (
